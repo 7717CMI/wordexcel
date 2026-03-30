@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: wordexcel-processor
+    runtime: python
+    buildCommand: |
+      cd python && pip install -r requirements.txt &&
+      cd frontend && npm install && npm run build &&
+      cd ..
+    startCommand: cd python && uvicorn main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 1500
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: NODE_VERSION
+        value: 20.11.0
