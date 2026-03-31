@@ -93,7 +93,7 @@ manager = ConnectionManager()
 # Ensure required directories exist
 Config.ensure_directories()
 
-@app.get("/")
+@app.get("/api/health")
 async def root():
     """Health check endpoint"""
     return {
