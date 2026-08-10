@@ -1,0 +1,19 @@
+.git
+.gitignore
+README.md
+render.yaml
+
+# Never bake secrets into the image
+**/.env
+**/.env.*
+
+# Build/runtime artefacts - regenerated inside the image
+**/node_modules
+**/.next
+**/out
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+python/uploads
+python/temp

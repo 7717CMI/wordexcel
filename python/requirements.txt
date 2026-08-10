@@ -1,19 +1,23 @@
+# Pinned so that a Render rebuild produces the same image as a local run.
+# Open ranges previously let each deploy pick up new majors (fastapi 0.115 ->
+# 0.141, openai 1.x -> 2.x) with no code change to explain a breakage.
+
 # Core dependencies
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-python-multipart>=0.0.9
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+python-multipart==0.0.32
 
 # OpenAI integration
-openai>=1.55.0
+openai==2.53.0
 
 # Document processing
-python-docx>=1.1.2
-docx2txt>=0.8
-openpyxl>=3.1.5
+python-docx==1.2.0
+docx2txt==0.9
+openpyxl==3.1.5
 
 # Configuration and validation
-python-dotenv>=1.0.1
-pydantic>=2.10.0
+python-dotenv==1.2.2
+pydantic==2.13.4
 
 # File handling
-aiofiles>=24.1.0
+aiofiles==25.1.0
