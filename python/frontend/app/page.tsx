@@ -14,6 +14,8 @@ interface FileResult {
   file_id: string
   market_name: string
   excel_filename: string
+  /** Friendly name the browser should save the file as. */
+  excel_download_name?: string
   excel_path: string
   success: boolean
   status: string
@@ -51,11 +53,18 @@ export default function Home() {
   const [wsConnected, setWsConnected] = useState<boolean>(false)
   const wsRef = useRef<WebSocket | null>(null)
 
+  // The WebSocket is opened once (empty-dep effect), so its handlers capture
+  // first-render state. These refs give the handlers the current values.
+  const downloadedFilesRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    downloadedFilesRef.current = downloadedFiles
+  }, [downloadedFiles])
+
   const downloadFile = useCallback(
-    async (downloadUrl: string, filename: string) => {
+    async (downloadUrl: string, filename: string, saveAs?: string) => {
       try {
         // Check if file has already been downloaded
-        if (downloadedFiles.has(filename)) {
+        if (downloadedFilesRef.current.has(filename)) {
           console.log(`File already downloaded: ${filename}`)
           // Send confirmation anyway to prevent backend blocking
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -76,12 +85,15 @@ export default function Home() {
           const url = window.URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = filename
+          a.download = saveAs || filename
           document.body.appendChild(a)
           a.click()
           window.URL.revokeObjectURL(url)
           document.body.removeChild(a)
-          setDownloadedFiles((prev) => new Set(Array.from(prev).concat(filename)))
+          downloadedFilesRef.current = new Set(
+            Array.from(downloadedFilesRef.current).concat(filename)
+          )
+          setDownloadedFiles(downloadedFilesRef.current)
           console.log(`Auto-downloaded: ${filename}`)
 
           // Send download confirmation to backend
@@ -105,7 +117,7 @@ export default function Home() {
         return false
       }
     },
-    [downloadedFiles, wsRef]
+    [wsRef]
   )
 
   const handleWebSocketMessage = useCallback(
@@ -196,7 +208,7 @@ export default function Home() {
           })
 
           // Check if this file has already been processed for download
-          if (downloadedFiles.has(message.excel_filename)) {
+          if (downloadedFilesRef.current.has(message.excel_filename)) {
             console.log(`File already downloaded: ${message.excel_filename}`)
             break
           }
@@ -207,6 +219,7 @@ export default function Home() {
             file_id: message.excel_filename, // Use excel_filename as file_id
             market_name: message.market_name,
             excel_filename: message.excel_filename,
+            excel_download_name: message.excel_download_name,
             excel_path: message.download_url,
             success: true,
             status: 'completed',
@@ -215,7 +228,11 @@ export default function Home() {
 
           // Auto-download the file immediately
           setTimeout(async () => {
-            const downloadSuccess = await downloadFile(message.download_url, message.excel_filename)
+            const downloadSuccess = await downloadFile(
+              message.download_url,
+              message.excel_filename,
+              message.excel_download_name
+            )
             if (downloadSuccess) {
               console.log(`Successfully downloaded and confirmed: ${message.excel_filename}`)
             } else {
@@ -300,8 +317,15 @@ export default function Home() {
           console.log('Unknown message type:', message.type)
       }
     },
-    [downloadFile, downloadedFiles]
+    [downloadFile]
   )
+
+  // The socket is created once, so onmessage must dispatch through a ref to
+  // reach the latest handler instead of the one captured on first render.
+  const messageHandlerRef = useRef(handleWebSocketMessage)
+  useEffect(() => {
+    messageHandlerRef.current = handleWebSocketMessage
+  }, [handleWebSocketMessage])
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -334,7 +358,7 @@ export default function Home() {
       ws.onmessage = (event) => {
         console.log('Raw WebSocket message received:', event.data)
         try {
-          handleWebSocketMessage(event)
+          messageHandlerRef.current(event)
         } catch (error) {
           console.error('Error handling WebSocket message:', error)
         }
@@ -741,50 +765,27 @@ export default function Home() {
   }
 
   const handleIndividualDownload = async (fileResult: FileResult) => {
-    try {
-      const downloadResponse = await fetch(`/api/download/${fileResult.excel_filename}`)
-      if (downloadResponse.ok) {
-        const blob = await downloadResponse.blob()
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = fileResult.excel_filename
-        document.body.appendChild(a)
-        a.click()
-        window.URL.revokeObjectURL(url)
-        document.body.removeChild(a)
-        setDownloadedFiles((prev) => new Set(Array.from(prev).concat(fileResult.excel_filename)))
-      } else {
-        console.error(`Failed to download ${fileResult.excel_filename}`)
-      }
-    } catch (downloadError) {
-      console.error(`Failed to download ${fileResult.excel_filename}:`, downloadError)
-    }
+    // The stored name is "<uuid>_<Market Name>.xlsm" and contains spaces, so
+    // it has to be percent-encoded before going into the URL.
+    await downloadFile(
+      `/api/download/${encodeURIComponent(fileResult.excel_filename)}`,
+      fileResult.excel_filename,
+      fileResult.excel_download_name
+    )
   }
 
   const handleDownloadAll = async () => {
     try {
       // Download all successful files one by one
       for (const result of bulkResults) {
-        if (!downloadedFiles.has(result.excel_filename)) {
-          const downloadResponse = await fetch(`/api/download/${result.excel_filename}`)
-          if (downloadResponse.ok) {
-            const blob = await downloadResponse.blob()
-            const url = window.URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = result.excel_filename
-            document.body.appendChild(a)
-            a.click()
-            window.URL.revokeObjectURL(url)
-            document.body.removeChild(a)
-
-            // Add to downloaded files set
-            setDownloadedFiles((prev) => new Set(Array.from(prev).concat(result.excel_filename)))
-
-            // Small delay to prevent browser from blocking multiple downloads
-            await new Promise((resolve) => setTimeout(resolve, 100))
-          }
+        if (!downloadedFilesRef.current.has(result.excel_filename)) {
+          await downloadFile(
+            `/api/download/${encodeURIComponent(result.excel_filename)}`,
+            result.excel_filename,
+            result.excel_download_name
+          )
+          // Small delay to prevent browser from blocking multiple downloads
+          await new Promise((resolve) => setTimeout(resolve, 100))
         }
       }
     } catch (error) {
@@ -1079,7 +1080,9 @@ export default function Home() {
                         >
                           <div className="text-sm text-gray-700">
                             <div className="font-medium">{result.filename}</div>
-                            <div className="text-gray-500">→ {result.excel_filename}</div>
+                            <div className="text-gray-500">
+                              → {result.excel_download_name || result.excel_filename}
+                            </div>
                           </div>
                           <button
                             onClick={() => handleIndividualDownload(result)}

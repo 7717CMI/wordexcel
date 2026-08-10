@@ -1,13 +1,29 @@
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from openai import OpenAI
 from config import Config
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-client = OpenAI(api_key=Config.OPENAI_API_KEY)
+# The OpenAI client is created lazily so that a missing/invalid API key surfaces
+# as a request-time error instead of crashing the process on import. Constructing
+# it at module scope makes the whole app fail to boot on Render when the env var
+# is not set, which shows up as "no open ports detected".
+_client: Optional[OpenAI] = None
+
+
+def get_client() -> OpenAI:
+    """Return a lazily-constructed OpenAI client."""
+    global _client
+    if _client is None:
+        if not Config.OPENAI_API_KEY:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not configured. Set it in the environment "
+                "(Render dashboard > Environment) or in python/.env"
+            )
+        _client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=Config.OPENAI_TIMEOUT)
+    return _client
 
 # Prompt template for extracting market data from Word documents
 EXTRACTION_PROMPT = """
@@ -91,17 +107,34 @@ CRITICAL REQUIREMENTS:
 - Return ONLY the JSON object - no markdown, no code blocks, no explanations
 """
 
+def _strip_code_fences(text: str) -> str:
+    """Remove a surrounding markdown code fence, if the model added one."""
+    content = text.strip()
+    if content.startswith('```'):
+        # Drop the opening fence line (```/```json) and the trailing fence.
+        content = content.split('\n', 1)[1] if '\n' in content else ''
+        if content.rstrip().endswith('```'):
+            content = content.rstrip()[:-3]
+    return content.strip()
+
+
 def extract_market_data(document_text: str) -> Dict[str, Any]:
     """Extract data using OpenAI"""
     try:
         logger.info('=== AI EXTRACTION DEBUG ===')
         logger.info(f'Document text length: {len(document_text)}')
-        logger.info(f'Document text preview (first 500 chars): {document_text[:500]}')
-        logger.info(f'Document text preview (last 500 chars): {document_text[-500:]}')
-        
-        # Create chat completion
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        # Guard against oversized documents blowing the model context window.
+        if len(document_text) > Config.MAX_DOCUMENT_CHARS:
+            logger.warning(
+                f'Document text truncated from {len(document_text)} to '
+                f'{Config.MAX_DOCUMENT_CHARS} characters'
+            )
+            document_text = document_text[:Config.MAX_DOCUMENT_CHARS]
+
+        # Create chat completion. json_object mode guarantees parseable output.
+        response = get_client().chat.completions.create(
+            model=Config.OPENAI_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -113,8 +146,18 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
                 }
             ],
             temperature=0.1,  # Low temperature for consistent extraction
-            max_tokens=2000,
+            max_tokens=Config.OPENAI_MAX_TOKENS,
+            response_format={"type": "json_object"},
         )
+
+        finish_reason = response.choices[0].finish_reason
+        if finish_reason == "length":
+            # A truncated response is not valid JSON; fail loudly rather than
+            # letting json.loads produce a confusing parse error.
+            raise Exception(
+                "AI response was truncated (max_tokens reached). Increase "
+                "OPENAI_MAX_TOKENS or reduce document size."
+            )
 
         # Extract response content
         response_content = response.choices[0].message.content
@@ -122,37 +165,19 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
             raise Exception("No response from OpenAI")
 
         logger.info('=== AI RESPONSE DEBUG ===')
-        logger.info(f'Raw AI response: {response_content}')
         logger.info(f'Response length: {len(response_content)}')
-        logger.info(f'Response preview: {response_content[:200]}...')
+        logger.debug(f'Raw AI response: {response_content}')
 
         # Try to parse the JSON response
         try:
-            # Clean the response to extract JSON content
-            json_content = response_content.strip()
-            
-            # Remove markdown code blocks if present
-            if json_content.startswith('```json'):
-                json_content = json_content.replace('```json', '', 1)
-            if json_content.startswith('```'):
-                json_content = json_content.replace('```', '', 1)
-            if json_content.endswith('```'):
-                json_content = json_content.replace('```', '', 1)
-            
-            # Clean up any remaining whitespace
-            json_content = json_content.strip()
-            
-            logger.info(f'Cleaned JSON content: {json_content}')
-            
-            # Parse JSON
+            json_content = _strip_code_fences(response_content)
             extracted_data = json.loads(json_content)
-            logger.info(f'Parsed data: {json.dumps(extracted_data, indent=2)}')
-            
+            logger.info(f'Parsed data keys: {list(extracted_data.keys())}')
             return extracted_data
-            
+
         except json.JSONDecodeError as parse_error:
             logger.error(f"Failed to parse OpenAI response: {parse_error}")
-            logger.error(f"Raw response: {response_content}")
+            logger.error(f"Raw response: {response_content[:2000]}")
             raise Exception("Invalid response format from AI model")
             
     except Exception as error:

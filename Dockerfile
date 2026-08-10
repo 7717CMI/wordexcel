@@ -8,7 +8,17 @@ RUN npm run build
 
 # Stage 2: Python runtime
 FROM python:3.12-slim
+
+# antiword is the fallback extractor for legacy .doc files; without it that
+# code path always falls through to the crude binary scraper.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends antiword \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Install Python dependencies
 COPY python/requirements.txt ./
@@ -31,5 +41,6 @@ RUN mkdir -p uploads temp
 # Expose port (Render sets $PORT)
 EXPOSE 10000
 
-# Start server
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --timeout-keep-alive 1500
+# Start server. Uvicorn's default proxy handling is enabled so the app sees
+# the original scheme/host behind Render's load balancer.
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 120

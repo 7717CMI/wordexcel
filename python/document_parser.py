@@ -166,7 +166,12 @@ def extract_text_from_word(file_path: str) -> str:
 
 def preprocess_text(text: str) -> str:
     """Basic text preprocessing for AI analysis"""
-    return text.replace('\r\n', '\n').replace('\r', '\n').replace('\n\\s*\n', '\n').replace('\\s+', ' ').strip()
+    # These collapses were written as str.replace with regex-looking literals
+    # ('\n\\s*\n', '\\s+'), which never matched anything.
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = re.sub(r'[ \t]+', ' ', text)      # collapse runs of spaces/tabs
+    text = re.sub(r'\n\s*\n\s*', '\n\n', text)  # collapse blank-line runs
+    return text.strip()
 
 def normalize_extracted_data(data: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize extracted data to handle common variations"""

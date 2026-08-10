@@ -34,21 +34,6 @@ A production-ready application for extracting market research data from Word doc
 
 ## Installation
 
-### Quick Start (Windows)
-
-```batch
-deploy-production.bat
-```
-
-### Quick Start (Linux/Mac)
-
-```bash
-chmod +x deploy-production.sh
-./deploy-production.sh
-```
-
-### Manual Installation
-
 1. **Install Python dependencies:**
 ```bash
 cd python
@@ -63,12 +48,25 @@ npm run build
 ```
 
 3. **Configure environment:**
-Create `python/.env` file:
+Create a `python/.env` file:
 ```env
 OPENAI_API_KEY=your_api_key_here
-API_URL=http://localhost:8000
-NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+The frontend calls the API with same-origin relative paths, so no API URL
+needs to be configured. Other optional settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | _(required)_ | Key used for extraction |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Extraction model |
+| `OPENAI_MAX_TOKENS` | `4000` | Response cap; raise for very large documents |
+| `MAX_DOCUMENT_CHARS` | `200000` | Document text is truncated to this before the model call |
+| `MAX_FILE_SIZE` | `52428800` | Upload limit in bytes (50 MB) |
+| `MAX_BULK_FILES` | `50` | Files per bulk batch |
+| `DOWNLOAD_CONFIRM_TIMEOUT` | `30` | Seconds to wait for the browser to confirm a download |
+| `DOWNLOAD_RETENTION_SECONDS` | `300` | How long a generated file stays on disk after being served |
+| `CORS_ORIGINS` | _(empty)_ | Comma-separated extra origins; unnecessary for same-origin deploys |
 
 ## Running the Application
 
@@ -88,43 +86,46 @@ npm run dev
 
 ### Production Mode
 
-#### Using PM2 (Recommended)
+The frontend is a static export (`next.config.js` sets `output: 'export'`),
+which FastAPI serves directly. Build it once, then run only the backend:
 
 ```bash
-# Install PM2 globally
-npm install -g pm2
-
-# Start all services
-pm2 start ecosystem.config.js
-
-# View logs
-pm2 logs
-
-# Stop all services
-pm2 stop all
+cd python/frontend && npm ci && npm run build
+cd .. && uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-#### Manual Start
+The whole app is then available on port 8000. Run a single worker: bulk jobs
+and the WebSocket progress channel hold state in process memory, so multiple
+workers would deliver progress to the wrong connection.
 
-1. **Backend:**
-```bash
-cd python
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
-```
+## Deployment (Render)
 
-2. **Frontend:**
-```bash
-cd python/frontend
-npm start
-```
+`render.yaml` provisions a single Docker web service. The build needs both
+Node (for the Next.js static export) and Python (for FastAPI), which Render's
+native Python runtime cannot provide, so the multi-stage `Dockerfile` is the
+supported path.
+
+1. Point Render at this repo; it picks up `render.yaml` as a Blueprint.
+2. Set `OPENAI_API_KEY` in the Render dashboard (it is marked `sync: false`
+   so it is never committed).
+3. Deploy. Render injects `$PORT`; the container binds to it, and
+   `/api/health` is used as the health check.
+
+Uploaded and generated files live on the container's ephemeral disk and are
+cleaned up automatically, so no persistent disk is required.
 
 ## API Endpoints
 
-- `POST /extract` - Extract data from a Word document
-- `POST /generate-excel` - Generate Excel from extracted data
-- `POST /process-file` - Process single file (extract + generate)
-- `POST /bulk-process` - Process multiple files
+- `GET /api/health` - Health check
+- `POST /api/upload` - Upload a Word document, returns a `fileId`
+- `POST /api/process` - Extract data from an uploaded document
+- `POST /api/generate-excel` - Generate the .xlsm from extracted data
+- `POST /api/independent-bulk-process` - Accept a batch; returns immediately
+  and reports progress over the WebSocket
+- `GET /api/download/{filename}` - Download a generated file
 - `WS /ws` - WebSocket endpoint for real-time updates
+
+Any unmatched non-`/api` path serves the frontend (SPA routing).
 
 ## Project Structure
 
@@ -142,9 +143,8 @@ wordexcel/
 │       ├── app/          # App router pages
 │       ├── components/   # React components
 │       └── package.json  # Node dependencies
-├── ecosystem.config.js    # PM2 configuration
-├── deploy-production.bat  # Windows deployment
-├── deploy-production.sh   # Linux/Mac deployment
+├── Dockerfile            # Multi-stage build used by Render
+├── render.yaml           # Render Blueprint
 └── README.md             # This file
 ```
 
@@ -168,28 +168,27 @@ wordexcel/
 - Implement load balancing for high traffic
 - Use cloud storage for file uploads
 
-## Monitoring
-
-- Check logs in `logs/` directory
-- Monitor WebSocket connections
-- Track API response times
-- Set up alerts for errors
-
 ## Troubleshooting
 
 ### Common Issues
 
-1. **WebSocket connection fails:**
-   - Check firewall settings
-   - Ensure ports 8000 and 3000 are open
-   - Verify CORS settings
+1. **Render deploy fails with "no open ports detected":**
+   - Check the logs for a startup traceback. The app starts without
+     `OPENAI_API_KEY` (extraction requests fail individually instead), so a
+     boot failure points at a different misconfiguration.
 
-2. **File processing errors:**
-   - Check file permissions
-   - Ensure temp/uploads directories exist
-   - Verify OpenAI API key is valid
+2. **"Failed to process document: OPENAI_API_KEY is not configured":**
+   - Set `OPENAI_API_KEY` in the Render dashboard and redeploy.
 
-3. **Build errors:**
+3. **Extraction fails with "AI response was truncated":**
+   - The document produced more JSON than `OPENAI_MAX_TOKENS` allows.
+     Raise it, or lower `MAX_DOCUMENT_CHARS`.
+
+4. **"Extracted data is incomplete":**
+   - The model could not find the expected market research fields in the
+     document. Check the server log for the parsed keys.
+
+5. **Build errors:**
    - Clear node_modules and reinstall
    - Check Node.js and Python versions
    - Review TypeScript errors
