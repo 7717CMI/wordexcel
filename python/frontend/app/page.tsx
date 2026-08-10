@@ -345,9 +345,13 @@ export default function Home() {
       }
 
       isConnecting = true
+      // Same origin in production (FastAPI serves this page). Next's dev
+      // proxy does not forward WebSocket upgrades, so `next dev` needs
+      // NEXT_PUBLIC_WS_URL pointed at the backend.
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const wsHost = window.location.host
-      const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`)
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || `${wsProtocol}//${wsHost}/ws`
+      const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         console.log('WebSocket connected')

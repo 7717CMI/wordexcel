@@ -15,12 +15,35 @@ def _resolve(path: str) -> str:
     return path if os.path.isabs(path) else os.path.normpath(os.path.join(BASE_DIR, path))
 
 
+# Provider defaults. DeepSeek exposes an OpenAI-compatible API, so the same
+# SDK drives both -- only the base URL, key and model name differ.
+_PROVIDER_DEFAULTS = {
+    'deepseek': {'base_url': 'https://api.deepseek.com', 'model': 'deepseek-chat'},
+    'openai': {'base_url': None, 'model': 'gpt-4o-mini'},
+}
+
+
 class Config:
-    # OpenAI Configuration
+    # LLM Configuration
+    LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'deepseek').strip().lower()
+    if LLM_PROVIDER not in _PROVIDER_DEFAULTS:
+        raise ValueError(
+            f"Unsupported LLM_PROVIDER {LLM_PROVIDER!r}; "
+            f"expected one of {sorted(_PROVIDER_DEFAULTS)}"
+        )
+
+    DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
-    OPENAI_MAX_TOKENS = int(os.getenv('OPENAI_MAX_TOKENS', 4000))
-    OPENAI_TIMEOUT = float(os.getenv('OPENAI_TIMEOUT', 120))
+
+    # Resolved per-provider settings; each is individually overridable.
+    LLM_API_KEY = DEEPSEEK_API_KEY if LLM_PROVIDER == 'deepseek' else OPENAI_API_KEY
+    LLM_BASE_URL = os.getenv('LLM_BASE_URL') or _PROVIDER_DEFAULTS[LLM_PROVIDER]['base_url']
+    LLM_MODEL = os.getenv('LLM_MODEL') or _PROVIDER_DEFAULTS[LLM_PROVIDER]['model']
+    LLM_MAX_TOKENS = int(os.getenv('LLM_MAX_TOKENS', 4000))
+    LLM_TIMEOUT = float(os.getenv('LLM_TIMEOUT', 120))
+
+    # Name of the env var the user needs to set, used in error messages.
+    LLM_KEY_ENV_VAR = 'DEEPSEEK_API_KEY' if LLM_PROVIDER == 'deepseek' else 'OPENAI_API_KEY'
 
     # Cap the document text sent to the model so a large report cannot exceed
     # the context window (roughly 4 chars per token).

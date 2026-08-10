@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source code
 COPY python/config.py python/main.py python/models.py ./
-COPY python/document_parser.py python/openai_client.py ./
+COPY python/document_parser.py python/llm_client.py ./
 COPY python/excel_processor_enhanced.py ./
 
 # Copy Excel template

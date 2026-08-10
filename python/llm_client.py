@@ -6,23 +6,34 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# The OpenAI client is created lazily so that a missing/invalid API key surfaces
-# as a request-time error instead of crashing the process on import. Constructing
-# it at module scope makes the whole app fail to boot on Render when the env var
-# is not set, which shows up as "no open ports detected".
+# DeepSeek serves an OpenAI-compatible API, so the OpenAI SDK is used for both
+# providers; only base_url/key/model differ (see Config.LLM_PROVIDER).
+#
+# The client is created lazily so that a missing/invalid API key surfaces as a
+# request-time error instead of crashing the process on import. Constructing it
+# at module scope makes the whole app fail to boot on Render when the env var is
+# not set, which shows up as "no open ports detected".
 _client: Optional[OpenAI] = None
 
 
 def get_client() -> OpenAI:
-    """Return a lazily-constructed OpenAI client."""
+    """Return a lazily-constructed client for the configured provider."""
     global _client
     if _client is None:
-        if not Config.OPENAI_API_KEY:
+        if not Config.LLM_API_KEY:
             raise RuntimeError(
-                "OPENAI_API_KEY is not configured. Set it in the environment "
-                "(Render dashboard > Environment) or in python/.env"
+                f"{Config.LLM_KEY_ENV_VAR} is not configured. Set it in the "
+                f"environment (Render dashboard > Environment) or in python/.env"
             )
-        _client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=Config.OPENAI_TIMEOUT)
+        _client = OpenAI(
+            api_key=Config.LLM_API_KEY,
+            base_url=Config.LLM_BASE_URL,
+            timeout=Config.LLM_TIMEOUT,
+        )
+        logger.info(
+            f"LLM client initialised: provider={Config.LLM_PROVIDER} "
+            f"model={Config.LLM_MODEL}"
+        )
     return _client
 
 # Prompt template for extracting market data from Word documents
@@ -119,7 +130,7 @@ def _strip_code_fences(text: str) -> str:
 
 
 def extract_market_data(document_text: str) -> Dict[str, Any]:
-    """Extract data using OpenAI"""
+    """Extract structured market data using the configured LLM provider."""
     try:
         logger.info('=== AI EXTRACTION DEBUG ===')
         logger.info(f'Document text length: {len(document_text)}')
@@ -134,7 +145,7 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
 
         # Create chat completion. json_object mode guarantees parseable output.
         response = get_client().chat.completions.create(
-            model=Config.OPENAI_MODEL,
+            model=Config.LLM_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -146,7 +157,7 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
                 }
             ],
             temperature=0.1,  # Low temperature for consistent extraction
-            max_tokens=Config.OPENAI_MAX_TOKENS,
+            max_tokens=Config.LLM_MAX_TOKENS,
             response_format={"type": "json_object"},
         )
 
@@ -156,13 +167,13 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
             # letting json.loads produce a confusing parse error.
             raise Exception(
                 "AI response was truncated (max_tokens reached). Increase "
-                "OPENAI_MAX_TOKENS or reduce document size."
+                "LLM_MAX_TOKENS or reduce document size."
             )
 
         # Extract response content
         response_content = response.choices[0].message.content
         if not response_content:
-            raise Exception("No response from OpenAI")
+            raise Exception(f"Empty response from {Config.LLM_PROVIDER}")
 
         logger.info('=== AI RESPONSE DEBUG ===')
         logger.info(f'Response length: {len(response_content)}')
@@ -176,10 +187,10 @@ def extract_market_data(document_text: str) -> Dict[str, Any]:
             return extracted_data
 
         except json.JSONDecodeError as parse_error:
-            logger.error(f"Failed to parse OpenAI response: {parse_error}")
+            logger.error(f"Failed to parse model response: {parse_error}")
             logger.error(f"Raw response: {response_content[:2000]}")
             raise Exception("Invalid response format from AI model")
             
     except Exception as error:
-        logger.error(f"OpenAI API error: {error}")
+        logger.error(f"{Config.LLM_PROVIDER} API error: {error}")
         raise error

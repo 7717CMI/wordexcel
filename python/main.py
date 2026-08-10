@@ -22,7 +22,7 @@ from document_parser import (
     validate_extracted_data,
     calculate_confidence
 )
-from openai_client import extract_market_data
+from llm_client import extract_market_data
 from excel_processor_enhanced import ExcelProcessorEnhanced
 
 # Configure logging
@@ -1072,10 +1072,14 @@ async def _on_startup():
     Render (which starts the app with `uvicorn main:app`).
     """
     Config.ensure_directories()
-    if not Config.OPENAI_API_KEY:
+    logger.info(
+        f"LLM provider: {Config.LLM_PROVIDER} (model {Config.LLM_MODEL})"
+    )
+    if not Config.LLM_API_KEY:
         logger.warning(
-            "OPENAI_API_KEY is not set - document processing will fail until it "
-            "is configured. The server will still start and serve the frontend."
+            f"{Config.LLM_KEY_ENV_VAR} is not set - document processing will fail "
+            "until it is configured. The server will still start and serve the "
+            "frontend."
         )
     await startup_cleanup()
 

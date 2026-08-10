@@ -9,10 +9,13 @@ services:
     plan: starter
     healthCheckPath: /api/health
     envVars:
-      - key: OPENAI_API_KEY
+      # Set this in the Render dashboard; sync:false keeps it out of the repo.
+      - key: DEEPSEEK_API_KEY
         sync: false
       # Uvicorn binds to $PORT, which Render injects.
-      - key: OPENAI_MODEL
-        value: gpt-4o-mini
+      - key: LLM_PROVIDER
+        value: deepseek
+      - key: LLM_MODEL
+        value: deepseek-chat
       - key: MAX_FILE_SIZE
         value: "52428800"
