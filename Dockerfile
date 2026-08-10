@@ -43,4 +43,8 @@ EXPOSE 10000
 
 # Start server. Uvicorn's default proxy handling is enabled so the app sees
 # the original scheme/host behind Render's load balancer.
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 120
+#
+# `sh -c` is needed to expand $PORT, and `exec` makes uvicorn replace the
+# shell so it receives SIGTERM directly -- otherwise the shell swallows the
+# signal and Render has to wait out the kill timeout on every restart.
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 120"]
